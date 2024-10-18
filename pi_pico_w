@@ -1,0 +1,173 @@
+import network
+import time
+import urequests as requests
+import gc
+import machine
+from machine import PWM, Pin
+from time import sleep
+ 
+p = PWM(Pin(28))
+p.freq(50)
+
+# Servo functions
+def sp(position):
+    p.duty_u16(position)
+    sleep(0.01)
+
+def s_open():
+    for pos in range(1000, 9000, 50):
+        sp(pos)
+
+def s_close():
+    for pos in range(9000, 1000, -50):
+        sp(pos)
+
+# WiFi credentials and bot information
+SSID = "hi"
+PASSWORD = "12345678"
+password = '1214'
+LAST_UPDATE_ID = 0
+BOT_TOKEN = '7852824612:AAHGBiK0MGN1DivBwAHb7OgHWsmzC0D8dN0'
+CHAT_ID = '1478316368'  
+message_counter = 0
+
+# Connect to Wi-Fi
+def connect_to_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(SSID, PASSWORD)
+
+    print("Connecting to Wi-Fi...")
+    for _ in range(10):
+        if wlan.isconnected():
+            print("Connected to Wi-Fi!")
+            return True
+        time.sleep(1)
+
+    print("Failed to connect to Wi-Fi.")
+    return False
+
+# Delete a message from the chat
+def delete_message(message_id):
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage'
+    payload = {
+        'chat_id': CHAT_ID,
+        'message_id': message_id
+    }
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            print(f"Message {message_id} deleted successfully!")
+        else:
+            print(f"Failed to delete message {message_id}. Status code: {response.status_code}, Response: {response.text}")
+    except Exception as e:
+        print(f"An error occurred while deleting the message: {e}")
+
+# Get incoming messages
+def isup():
+    global LAST_UPDATE_ID
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={LAST_UPDATE_ID + 1}&limit=1'
+    try:
+        response = requests.get(url, timeout=10)  # Increase timeout
+        updates = response.json()
+        if updates['ok']:
+            if updates['result']:
+                update = updates['result'][0]
+                LAST_UPDATE_ID = update['update_id']
+                gc.collect()  # Memory cleanup
+                return update['message']
+    except Exception as e:
+        print(f"Error fetching updates: {e}")
+    return None
+
+# Send a message
+def send_message(message):
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
+    payload = {
+        'chat_id': CHAT_ID,
+        'text': message
+    }
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            print("Message sent successfully!")
+            return response.json()['result']['message_id']
+        else:
+            print(f"Failed to send message. Status code: {response.status_code}, Response: {response.text}")
+    except Exception as e:
+        print(f"An error occurred while sending the message: {e}")
+
+# Clean up memory
+def clean_memory():
+    gc.collect()
+    print("Memory cleaned.")
+
+# Handle incoming messages and execute commands
+def handle_conversation():
+    global password, message_counter
+    message = isup()
+
+    if message:
+        text = message.get('text', '').lower()
+        msg_id = message['message_id']
+
+        if text == 'change password':
+            send_message('Enter old password')
+            old_password_msg = isup()
+            if old_password_msg:
+                old_password = old_password_msg.get('text', '')
+                if old_password == password:
+                    send_message('Enter new password')
+                    new_password_msg = isup()
+                    if new_password_msg:
+                        new_password = new_password_msg.get('text', '')
+                        password = new_password
+                        new_password_id = send_message(f"Your new password is now set to: {password}")
+                        time.sleep(5)
+                        delete_message(new_password_id)
+                    delete_message(new_password_msg['message_id'])
+                delete_message(old_password_msg['message_id'])
+                
+        elif text == 'open':
+            send_message('Enter password')
+            pp = isup()
+            if pp and pp.get('text') == password:
+                print("Opening lock")
+                s_open()
+                delete_message(pp['message_id'])
+
+        elif text == 'lock':
+            send_message('Enter password')
+            pp = isup()
+            if pp and pp.get('text') == password:
+                print("Locking")
+                s_close()
+                delete_message(pp['message_id'])
+ 
+        message_counter += 1
+        if message_counter >= 5:
+            print("Message limit reached. Cleaning up memory...")
+            message_counter = 0
+            clean_memory()
+ 
+        message = None  
+        gc.collect()
+ 
+def reboot():
+    print("Rebooting the system to clear memory...")
+    machine.reset()
+
+if __name__ == "__main__":
+    if connect_to_wifi():
+        send_message('System is online and ready')
+        while True:
+            try:
+                handle_conversation()
+                gc.collect()
+            except MemoryError:
+                print("MemoryError occurred, cleaning up memory.")
+                clean_memory()
+            except Exception as e:
+                print(f"An error occurred: {e}")
+                time.sleep(1)
+
